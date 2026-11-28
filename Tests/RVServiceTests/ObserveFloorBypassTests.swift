@@ -310,20 +310,33 @@ struct ObserveFloorBypassTests {
         }
     }
 
-    /// An opaque command the engine already denies keeps that deny on an
-    /// observe host: its rule id, row and allow-once path, not the label.
-    @Test("observe host: an opaque command's deny stays the deny")
-    func observeKeepsUnwrapLimitedDeny() async throws {
+    /// An opaque command whose deny observe only watches (`unwrap-limited`,
+    /// C1) still stops on an observe host, as the floor's own
+    /// `observe.floor:unanalyzable`, never as an allow.
+    @Test("observe host: an opaque command's watched-class deny stops as unanalyzable")
+    func observeFloorsOpaqueUnwrapLimited() async throws {
         let home = try observeHome()
         defer { remove(home) }
         let command = "echo \(stop) | base64 -d | sh"
+        #expect(runsOpaqueProgram(ShellCommand(rawValue: command)))
+        let result = await observeApply(command, home: home)
+        #expect(result.decision == .indeterminate(.observeUnanalyzable))
+    }
+
+    /// Any other deny an opaque command gets keeps that deny on an observe
+    /// host: its rule id, row and allow-once path, not the label.
+    @Test("observe host: an opaque command's pack deny stays the deny")
+    func observeKeepsOpaquePackDeny() async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let command = #"eval "$X"; git reset --hard"#
         #expect(runsOpaqueProgram(ShellCommand(rawValue: command)))
         let result = await observeApply(command, home: home)
         guard case .deny(let deny) = result.decision else {
             Issue.record("must stay denied, got \(result.decision)")
             return
         }
-        #expect(deny.ruleID == BuiltinRule.unwrapLimited.ruleID)
+        #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
     }
 
     /// Literal feeds are not opaque in themselves: the floor reads their
@@ -912,6 +925,10 @@ struct ObserveFloorBypassTests {
         "ls ~/.local/bin/rvd && stat ~/.local/bin/rv",
         "head -n 5 ~/Library/LaunchAgents/dev.rv.evaluate.plist",
         "ls ~/.local/bin/rvd | wc -l",
+        "~/.local/bin/rv --version",
+        "~/.local/bin/rv doctor",
+        "~/.local/bin/rv doctor --json",
+        "~/.local/bin/rv service status; ~/.local/bin/rv host list",
     ])
     func observeAllowsProvenWiringReads(command: String) async throws {
         let home = try observeHome()
@@ -931,6 +948,32 @@ struct ObserveFloorBypassTests {
         let home = try observeHome()
         defer { remove(home) }
         let result = await blockingJudgeApply(command, home: home, mode: .enforce)
+        #expect(result.decision != .allow, "\(command)")
+    }
+
+    /// A shadow judge (`judge.mode` unset or `shadow`) is scored and logged
+    /// but never decides: under enforce, a judge block on a pack-allowed
+    /// command leaves it allowed, while pack denies stand.
+    @Test("enforce host, shadow judge: a judge block does not decide", arguments: [
+        "stat ~/.local/bin/rvd",
+        "brew list",
+        "curl -s localhost:3100/api/health",
+    ])
+    func shadowJudgeNeverDecides(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await blockingJudgeApply(command, home: home, mode: .enforce, shadow: true)
+        #expect(result.decision == .allow, "\(command)")
+    }
+
+    @Test("enforce host, shadow judge: pack denies stand", arguments: [
+        "rm -rf ~",
+        "git push --force origin main",
+    ])
+    func shadowJudgeKeepsPackDenies(command: String) async throws {
+        let home = try observeHome()
+        defer { remove(home) }
+        let result = await blockingJudgeApply(command, home: home, mode: .enforce, shadow: true)
         #expect(result.decision != .allow, "\(command)")
     }
 
@@ -965,6 +1008,10 @@ struct ObserveFloorBypassTests {
         "LS_COLORS=x ls ~/.local/bin/rvd",
         "file -C -m ~/.local/bin/rvd",
         "sed -n 1p ~/.claude/settings.json",
+        // rv itself: only its report-only forms are a proof.
+        "~/.local/bin/rv setup",
+        "~/.local/bin/rv host mode claude block",
+        "~/.local/bin/rv doctor; touch ~/.local/bin/rvd",
         // Grapheme clusters hide a separator or redirect from a
         // Character scan: `"\r\n"` and `">\u{301}"` are one Character.
         "ls ~/.local/bin/rvd \r\nrm ~/.claude/settings.json",
@@ -1004,7 +1051,7 @@ struct ObserveFloorBypassTests {
     }
 
     private func blockingJudgeApply(
-        _ command: String, home: HomeDirectory, mode: GuardMode
+        _ command: String, home: HomeDirectory, mode: GuardMode, shadow: Bool = false
     ) async -> EvaluationResult {
         let block: JudgeRuntime.JudgeRun
         do {
@@ -1016,7 +1063,8 @@ struct ObserveFloorBypassTests {
         let inputs = EvaluationInputs(
             guardMode: mode,
             judge: JudgeSelection(
-                engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+                engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true),
+                shadow: shadow
             ),
             store: .gather(home: home, cwd: nil)
         )

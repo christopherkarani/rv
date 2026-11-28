@@ -72,6 +72,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("→  rv setup"))
         #expect(outcome.stdout.contains("safety normal"))
         #expect(outcome.stdout.contains("block ledger on"))
+        #expect(outcome.stdout.contains("judge  shadow · logs only"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
 }

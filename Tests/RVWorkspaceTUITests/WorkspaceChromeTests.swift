@@ -80,6 +80,16 @@ struct WorkspaceChromeTests {
         #expect(WorkspaceStatusLabel.isAgent("zsh") == false)
     }
 
+    @Test func onlyTheTitlesFirstWordNamesAnAgent() {
+        #expect(WorkspaceStatusLabel.isAgent("✳ Claude Code"))
+        #expect(WorkspaceStatusLabel.isAgent("/usr/local/bin/aider --yes"))
+        #expect(WorkspaceStatusLabel.isAgent("Codex: fixing tests"))
+        #expect(WorkspaceStatusLabel.isAgent("vim claude.md") == false)
+        #expect(WorkspaceStatusLabel.isAgent("zsh — ~/src/claude-notes") == false)
+        #expect(WorkspaceStatusLabel.isAgent("claudette") == false)
+        #expect(WorkspaceStatusLabel.isAgent("") == false)
+    }
+
     @Test func runningIsSilent() {
         let owned = WorkspaceTerminalState(runtime: UUID(), title: "shell", running: true, lease: .owned)
         let running = WorkspacePane(id: PaneID(), lifecycle: .running)

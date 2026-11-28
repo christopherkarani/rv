@@ -71,8 +71,12 @@ struct ClaudeInfraAskAdapterTests {
             reason == Self.prompt(
                 subject: "Bash: " + forgery.shown, layer: "rvd is not reachable", reason: daemonUnreachableMessage),
             "\(forgery): \(reason)")
-        // Exactly one paragraph break: the one before rv's warning.
-        #expect(reason.components(separatedBy: "\n").count == 3, "\(forgery)")
+        // Exactly one paragraph break, the one before rv's warning; the
+        // only other line breaks are the ones in rv's own stop text.
+        #expect(reason.components(separatedBy: "\n\n").count == 2, "\(forgery)")
+        #expect(
+            reason.components(separatedBy: "\n").count == 3 + daemonUnreachableMessage.filter { $0 == "\n" }.count,
+            "\(forgery)")
     }
 
     /// A command whose escaped form fits in 300 characters is shown whole.
@@ -215,7 +219,7 @@ struct ClaudeInfraAskAdapterTests {
             environment: environment)
         let reason = try expectFailClosed(host: .claude, run: run)
         #expect(reason.contains(Self.marker) == false, "\(path): \(reason)")
-        #expect(reason.contains("`rv doctor`"), "\(path): \(reason)")
+        #expect(reason.contains("rv doctor"), "\(path): \(reason)")
     }
 
     /// The owner can pin "block" with `"hookAskWhenDown": false` in
@@ -231,7 +235,7 @@ struct ClaudeInfraAskAdapterTests {
             })
         let reason = try expectFailClosed(host: .claude, run: run)
         #expect(reason.contains(Self.marker) == false, "\(path): \(reason)")
-        #expect(reason.contains("`rv doctor`"), "\(path): \(reason)")
+        #expect(reason.contains("rv doctor"), "\(path): \(reason)")
     }
 
     /// The pin only tightens, so a config.json that exists but cannot be
@@ -688,11 +692,11 @@ struct ClaudeInfraAskAdapterTests {
                 claudeAskWire(reason: daemonUnreachableMessage, exit: 137)
             case .downReasonBesideDecisionDeny:
                 .stdout(
-                    "{\"decision\":\"deny\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(daemonUnreachableMessage)\"}}\n",
+                    "{\"decision\":\"deny\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(jsonStringBody(daemonUnreachableMessage))\"}}\n",
                     exit: 0)
             case .downReasonBesideDecisionAsk:
                 .stdout(
-                    "{\"decision\":\"ask\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(daemonUnreachableMessage)\"}}\n",
+                    "{\"decision\":\"ask\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(jsonStringBody(daemonUnreachableMessage))\"}}\n",
                     exit: 0)
             case .noReason:
                 .stdout("{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n", exit: 0)
@@ -702,7 +706,7 @@ struct ClaudeInfraAskAdapterTests {
                 claudeAskWire(reason: daemonUnreachableMessage + " Approve to continue.")
             case .downReasonOnlyInSystemMessage:
                 .stdout(
-                    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"},\"systemMessage\":\"\(daemonUnreachableMessage)\"}\n",
+                    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"},\"systemMessage\":\"\(jsonStringBody(daemonUnreachableMessage))\"}\n",
                     exit: 0)
             }
         }
@@ -783,16 +787,16 @@ private let backslash = String(UnicodeScalar(92))
 private let tooLongToAskNote =
     "The command or path is too long to show in full for approval, so rv blocked it instead of asking."
 
-/// `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
+/// `kTimeoutText` / `kConnectionText` in `Sources/rv-c/hook_fallback.c`
 /// (pinned by `ClaudeAdapterHookTests.cDownReasons_matchHookFallbackSource`).
-private let cTimeoutMessage = "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
+private let cTimeoutMessage = cDownStop("rv.hook/timeout", why: "rv's daemon did not answer in time", fix: "rv doctor")
 private let cConnectionMessage =
-    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
+    cDownStop("rv.hook/connection", why: "rv lost its daemon before a verdict", fix: "rv doctor", owner: "Zoë")
 
 /// The C hook's Claude `ask` reply for `reason` (`render_ask`).
 private func claudeAskWire(reason: String, exit: Int32 = 0) -> AdapterStub {
     .stdout(
-        "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(reason)\"},\"systemMessage\":\"\(reason)\"}\n",
+        "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(jsonStringBody(reason))\"},\"systemMessage\":\"\(jsonStringBody(reason))\"}\n",
         exit: exit)
 }
 

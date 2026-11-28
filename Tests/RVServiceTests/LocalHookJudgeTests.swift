@@ -119,6 +119,44 @@ struct LocalHookJudgeTests {
         }
     }
 
+    /// Shadow (no `judge.mode`, the default) covers the hook-local path:
+    /// a review or block from the pool never blocks or asks, it is logged
+    /// as a would-be and the call is allowed, exactly as rvd answers it.
+    @Test(arguments: ["review", "block"])
+    func shadowNeverBlocksOrAsksLocally(_ choice: String) async throws {
+        let fixture = try LocalHookFixture(
+            judgeBundle: true, judge: ScoredPoolClient(.fixed(choice: choice)), judgeMode: nil)
+        let stdin = claudeBash(Self.judged, cwd: fixture.workspace)
+        let local = await fixture.decider.decide(host: .claude, stdin: stdin)
+        let rvd = try await fixture.rvdReply(host: .claude, stdin: stdin)
+        #expect(!rvd.stdout.contains(#""permissionDecision":"deny""#), "rvd: \(rvd)")
+        #expect(!rvd.stdout.contains(#""permissionDecision":"ask""#), "rvd: \(rvd)")
+        switch local {
+        case .escalate(let reason):
+            Issue.record("a shadow verdict is final locally, escalated \(reason)")
+        case .final(let reply):
+            #expect(!reply.stdout.contains(#""permissionDecision":"deny""#), "\(choice) answered \(reply)")
+            #expect(!reply.stdout.contains(#""permissionDecision":"ask""#), "\(choice) answered \(reply)")
+            #expect(reply == rvd)
+        }
+        let log = try fixture.configFileText("judge-log.jsonl")
+        #expect(log.contains(#""choice":"\#(choice)""#), "\(log)")
+        #expect(log.contains("wouldBe"), "\(log)")
+    }
+
+    /// An unknown `judge.mode` is shadow too, on the hook-local path.
+    @Test func unknownJudgeModeIsShadowLocally() async throws {
+        let fixture = try LocalHookFixture(
+            judgeBundle: true, judge: ScoredPoolClient(.fixed(choice: "block")), judgeMode: "bogus")
+        let local = await fixture.decider.decide(host: .claude, stdin: claudeBash(Self.judged, cwd: fixture.workspace))
+        guard case .final(let reply) = local else {
+            Issue.record("a shadow verdict is final locally, got \(local)")
+            return
+        }
+        #expect(!reply.stdout.contains(#""permissionDecision":"deny""#))
+        #expect(!reply.stdout.contains(#""permissionDecision":"ask""#))
+    }
+
     static let nonVerdicts: [PoolOutcome?] = [
         nil, .busy, .late, .warming, .failed("worker crashed"),
         .loadFailed(LoadFailure(kind: .badBundle, message: "x")),
@@ -156,7 +194,9 @@ struct LocalHookJudgeTests {
         #expect(refused.count == 1, "the broken bundle is selected and the pool asked")
         let rvd = try await fixture.rvdReply(host: .claude, stdin: stdin)
         #expect(rvd != packsOnly, "rvd must not give the packs-only answer for a broken bundle")
-        #expect(rvd.stdout.contains("Ask the owner to run `rv doctor`"), "\(rvd.stdout)")
+        // The why names the broken judge; the one step is the minted code
+        // (or, with none, the `rv doctor` the refusal names).
+        #expect(rvd.stdout.contains("\\nwhy     laya judge pool could not load the model\\nwho     ask "), "\(rvd.stdout)")
     }
 
     @Test func withoutAPoolClientAJudgedCallEscalates() async throws {

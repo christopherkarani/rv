@@ -251,6 +251,9 @@ public struct DoctorViewModel: Equatable, Sendable {
     public var safety: SafetyLevel
     /// Whether the denial ledger is writing.
     public var blocksEnabled: Bool
+    /// Whether the judge decides (`judge.mode` `live`); false is shadow,
+    /// the default: it scores and logs, never stops or asks.
+    public var judgeLive: Bool = false
     /// Workspace leftovers, when the caller probed for them.
     public var leftovers: DoctorLeftoversView?
     /// Install/runtime problems in display order; empty when none were found.
@@ -268,6 +271,7 @@ public struct DoctorViewModel: Equatable, Sendable {
         grade: DoctorProtectionGrade = .hook,
         safety: SafetyLevel = .normal,
         blocksEnabled: Bool = true,
+        judgeLive: Bool = false,
         leftovers: DoctorLeftoversView? = nil,
         problems: [DoctorProblem] = []
     ) {
@@ -278,6 +282,7 @@ public struct DoctorViewModel: Equatable, Sendable {
         self.grade = grade
         self.safety = safety
         self.blocksEnabled = blocksEnabled
+        self.judgeLive = judgeLive
         self.leftovers = leftovers
         self.problems = problems
     }

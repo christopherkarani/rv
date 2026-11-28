@@ -104,7 +104,7 @@ public enum JudgeRuntime {
             case .laya: return bundleDir(home: home)
             }
         }
-        return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle)
+        return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle, shadow: config.judgeDecides == false)
     }
 
     /// The engine that will actually run, with its validated bundle dir.
@@ -294,6 +294,16 @@ public enum JudgeRuntime {
         lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
         guard case .allow = result.decision else { return (result, nil) }
+        if inputs.judge.shadow {
+            // Shadow judge (`judge.mode` not `live`): the call gets what
+            // enforce gives with no judge (`packsOnlyFloor`); the judge's
+            // opinion only reaches the judge log.
+            let log = shadow(
+                result, command: command, inputs: inputs, judge: judge,
+                provenance: provenance, now: now, cwd: cwd, allowSafeLane: allowSafeLane,
+                isPeek: isPeek, lateLog: lateLog)
+            return (packsOnlyFloor(result, command: command), log)
+        }
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -345,6 +355,10 @@ public enum JudgeRuntime {
     /// Observe path: the would-be verdict as a log row, always allow.
     /// `wouldBe` is what enforcement would have returned before the Policy
     /// gate (the door records an observed denial row from it).
+    ///
+    /// Under a shadow judge the door does not call this: the would-be is
+    /// the packs-only answer enforce gives, and the judge only reaches the
+    /// log (`shadow`).
     static func observe(
         wouldBe result: EvaluationResult,
         command: ShellCommand,
@@ -357,6 +371,63 @@ public enum JudgeRuntime {
         isPeek: Bool,
         lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
     ) -> (result: EvaluationResult, wouldBe: EvaluationResult, floorsWouldBe: Bool, log: GatedEffect.JudgeLogRow) {
+        let scored = score(
+            result, command: command, inputs: inputs, judge: judge, provenance: provenance,
+            cwd: cwd, allowSafeLane: allowSafeLane, isPeek: isPeek, lateLog: lateLog)
+        return (result.observedAllow, scored.reading.outcome, scored.floorsWouldBe, logRow(
+            guardMode: inputs.guardMode, subject: .wouldBe(scored.reading.outcome),
+            verdict: scored.reading.verdict, action: scored.reading.action, engine: inputs.judge.engine,
+            note: noteFor(scored.reading.note, contextPartial: scored.partial), now: now, isPeek: isPeek
+        ))
+    }
+
+    /// Shadow judge (`judge.mode` not `live`), in every guard mode: the
+    /// judge scores a pack-allow and its opinion is a judge-log row noted
+    /// `shadow`, nothing else. It never decides, never raises an allow and
+    /// never becomes an observe would-be or a denial row. Independent of
+    /// `observe`, so either can change alone.
+    static func shadow(
+        _ result: EvaluationResult,
+        command: ShellCommand,
+        inputs: EvaluationInputs,
+        judge: any JudgePort,
+        provenance: ActionProvenance,
+        now: Date,
+        cwd: WorkingDirectory?,
+        allowSafeLane: Bool,
+        isPeek: Bool,
+        lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)? = nil
+    ) -> GatedEffect.JudgeLogRow {
+        let scored = score(
+            result, command: command, inputs: inputs, judge: judge, provenance: provenance,
+            cwd: cwd, allowSafeLane: allowSafeLane, isPeek: isPeek, lateLog: lateLog)
+        let note = ["shadow", scored.reading.note].compactMap(\.self).joined(separator: "; ")
+        return logRow(
+            guardMode: inputs.guardMode, subject: .wouldBe(scored.reading.outcome),
+            verdict: scored.reading.verdict, action: scored.reading.action, engine: inputs.judge.engine,
+            note: noteFor(note, contextPartial: scored.partial), now: now, isPeek: isPeek
+        )
+    }
+
+    /// One judge reading of a pack-allow (none for a safe-lane command, a
+    /// deny, or a missing bundle). `floorsWouldBe` marks where `apply`
+    /// would take the packs-only floor (no bundle, or a judge that is
+    /// unavailable). The callers that consume the would-be (`peekVerdict`
+    /// for `rv test` / `rv explain`, `applyVerdict` for the SDK evaluate
+    /// RPC) apply it; a plain `apply` or peek discards the would-be, so it
+    /// skips the parse. The log row keeps the unfloored reading, as
+    /// `apply`'s does.
+    private static func score(
+        _ result: EvaluationResult,
+        command: ShellCommand,
+        inputs: EvaluationInputs,
+        judge: any JudgePort,
+        provenance: ActionProvenance,
+        cwd: WorkingDirectory?,
+        allowSafeLane: Bool,
+        isPeek: Bool,
+        lateLog: (@Sendable (GatedEffect.JudgeLogRow) -> Void)?
+    ) -> (reading: JudgeReading, floorsWouldBe: Bool, partial: Bool) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -364,12 +435,6 @@ public enum JudgeRuntime {
         var reading = JudgeReading(
             outcome: result, verdict: nil, action: nil, note: safe ? "safe-lane" : nil
         )
-        // `floorsWouldBe` marks where `apply` would take the packs-only
-        // floor (no bundle, or a judge that is unavailable). The callers
-        // that consume the would-be (`peekVerdict` for `rv test` /
-        // `rv explain`, `applyVerdict` for the SDK evaluate RPC) apply it;
-        // a plain `apply` or peek discards the would-be, so it skips the
-        // parse. The log row keeps the unfloored reading, as `apply`'s does.
         var floorsWouldBe = false
         if !safe, case .allow = result.decision {
             if let bundle = selection.bundle {
@@ -388,11 +453,7 @@ public enum JudgeRuntime {
                 floorsWouldBe = true
             }
         }
-        return (result.observedAllow, reading.outcome, floorsWouldBe, logRow(
-            guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
-            verdict: reading.verdict, action: reading.action, engine: selection.engine,
-            note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
-        ))
+        return (reading, floorsWouldBe, partial)
     }
 
     /// What one judge run means for a pack-allow: the threshold-resolved

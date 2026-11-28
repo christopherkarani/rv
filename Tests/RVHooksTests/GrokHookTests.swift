@@ -152,12 +152,13 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(wire.stdout.contains("updatedInput") == false)
 }
 
-@Test func grokEncodeDeny_reasonIsOneLine() throws {
+@Test func grokEncodeDeny_reasonIsOneStop() throws {
     let reason =
         resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let parsed = try grokDenyObject(wire.stdout)
-    #expect(parsed.reason.contains("\n") == false)
+    #expect(parsed.reason == resetHardHostDeny)
+    #expect(parsed.reason.split(separator: "\n").count == 3)
     #expect(parsed.reason.contains("═") == false)
     #expect(parsed.reason.contains("\u{001B}") == false)
     #expect(parsed.keys.sorted() == ["decision", "reason"])
@@ -255,7 +256,10 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
             }
         )
     )
-    #expect(wire.stdout.contains(hostFileDenyLine(reason: reason)))
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    let text = try #require(json["reason"] as? String)
+    #expect(text.hasSuffix("(core.secrets/env)\nwhy     access to a sensitive path is not allowed\nwho     \(ownTerminalLine())"))
+    #expect(text.hasPrefix("✕ Stopped   ") && text.hasPrefix("✕ Stopped   (") == false)
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
     #expect(wire.stdout.contains("Blocked  (") == false)
 }

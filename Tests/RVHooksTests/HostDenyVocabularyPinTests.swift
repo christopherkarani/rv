@@ -2,26 +2,31 @@ import Testing
 import RVDomain
 @testable import RVHooks
 
-/// Hook deny text that reads command words from `CommandVocabulary` is
-/// byte-identical to the literal sentences it replaced.
+/// Stop text reads command words from `CommandVocabulary`, so the A4 rename
+/// (`rv unlock`) switches every stop at once.
 @Suite("Host deny text vocabulary pins")
 struct HostDenyVocabularyPinTests {
-    @Test func unlockSentencesAreUnchanged() throws {
+    @Test func unlockLinesUseTheTableSpelling() throws {
         let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
-        #expect(ttyUnlockHint == "Run it in Terminal, or rv allow-once.")
+        let unlock = CommandVocabulary.Command.allowOnce.invocation
+        #expect(unlockLine(for: code) == "ask your user to run  \(unlock) a1b2c3")
+        #expect(earlierPendingUnlockLine() == "ask your user to run the earlier code with  \(unlock)")
         #expect(
-            unlockLine(for: code)
-                == "Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks the reviewed command once, including its sudo, env, and path spellings."
+            ownerRunsLine(CommandVocabulary.Command.doctor.invocation)
+                == "ask your user to run  rv doctor"
         )
-        #expect(
-            earlierPendingUnlockLine
-                == "A one-shot unlock is already pending for this command. Paste the earlier rv allow-once code in Terminal."
-        )
+        #expect(unlock == "rv allow-once")
     }
 
     @Test func unlockCodeIsFoundAfterTheTableSpelling() {
-        #expect(allowOnceUnlockCode(in: "RV · Blocked. Paste: rv allow-once a1b2c3. Why.")?.rawValue == "a1b2c3")
+        #expect(allowOnceUnlockCode(in: "who     ask Chris to run  rv allow-once a1b2c3")?.rawValue == "a1b2c3")
         #expect(allowOnceUnlockCode(in: "rv allow-once") == nil)
         #expect(allowOnceUnlockCode(in: "rv unlock a1b2c3") == nil)
+    }
+
+    @Test func verdictWordsAreTheTableGlyph() {
+        let notice = StopNotice(subject: "x", rule: "a.b/c", why: "w", who: "o")
+        #expect(notice.verdictLine.hasPrefix(
+            "\(CommandVocabulary.Glyph.stopped.rawValue) \(CommandVocabulary.Glyph.stopped.word)   "))
     }
 }

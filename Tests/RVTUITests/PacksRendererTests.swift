@@ -272,3 +272,50 @@ private func renderGrouped(
     #expect(lines.contains { $0.contains(palette.muted) && $0.contains("○") })
     #expect(lines.contains { $0.contains(palette.muted) && $0.contains("Legend") })
 }
+
+// G4: `rv packs test` frame.
+
+@Test func packTestRenderer_allPass_endsWithReadyAndTheTurnOnCommand() {
+    let model = PackTestViewModel(
+        packID: PackID(rawValue: "database.redis"),
+        rules: [
+            .init(name: "stdin-unverified", stops: 0, allows: 0, failures: []),
+            .init(name: "flushall", stops: 1, allows: 2, failures: []),
+        ],
+        turnOn: "rv packs enable database.redis"
+    )
+    #expect(PackTestRenderer().render(model, palette: colorOffPalette) == [
+        "  – stdin-unverified   no examples",
+        "  ✓ flushall           stops 1 · allows 2",
+        "",
+        "  ✓ Ready. rv packs enable database.redis",
+    ])
+}
+
+@Test func packTestRenderer_failure_listsEachExampleAndCounts() {
+    let model = PackTestViewModel(
+        packID: PackID(rawValue: "database.redis"),
+        rules: [
+            .init(name: "flushdb", stops: 1, allows: 1, failures: ["stop: redis-cli FLUSHDB ran"]),
+            .init(name: "flushall", stops: 1, allows: 2, failures: []),
+        ],
+        turnOn: nil
+    )
+    #expect(PackTestRenderer().render(model, palette: colorOffPalette) == [
+        "  ✕ flushdb    stops 1 · allows 1",
+        "      ✕ stop: redis-cli FLUSHDB ran",
+        "  ✓ flushall   stops 1 · allows 2",
+        "",
+        "  ✕ 1 rule failed.",
+    ])
+    #expect(model.passed == false)
+}
+
+@Test func packTestRenderer_packOn_readyHasNoCommand() {
+    let model = PackTestViewModel(
+        packID: PackID(rawValue: "core.git"),
+        rules: [.init(name: "reset-hard", stops: 1, allows: 1, failures: [])],
+        turnOn: nil
+    )
+    #expect(PackTestRenderer().render(model, palette: colorOffPalette).last == "  ✓ Ready.")
+}

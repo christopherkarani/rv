@@ -75,7 +75,7 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.hasSuffix("\n"))
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
-    #expect(wire.stdout.contains(reason))
+    #expect(wire.stdout.contains(jsonQuoted(reason)))
 }
 
 @Test func openClawEncodeDeny_sameReasonAsPi() {
@@ -178,5 +178,5 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
     #expect(openclaw.exitCode == 1)
     #expect(openclaw.stdout.contains("\"decision\":\"deny\""))
     #expect(openclaw.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(openclaw.stdout.contains(approvalPendingLine))
+    #expect(openclaw.stdout.contains("\\nwho     ask "))
 }
