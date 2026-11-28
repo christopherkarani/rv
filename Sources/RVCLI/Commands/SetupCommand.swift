@@ -9,7 +9,8 @@ import RVTheme
 struct Setup: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "setup",
-        abstract: "Wire rv-owned host hooks and the rvd service (LaunchAgent on macOS, systemd user unit on Linux)."
+        abstract: "Wire rv-owned host hooks and the rvd service (LaunchAgent on macOS, systemd user unit on Linux).",
+        subcommands: [SetupKeys.self]
     )
 
     @Flag(name: .customLong("json"), help: "One rv.setup.v1 JSON document (same as --robot).")
@@ -77,6 +78,18 @@ struct Setup: AsyncParsableCommand {
             clock: LiveSetupCeremonyClock(),
             write: CeremonyCLI.stdoutWriter()
         )
+        // At a terminal, a good setup ends with the keys step: the keys
+        // agents can read, by name, and one question. Robot and piped
+        // output, and an agent's run, never see it (`KeysGate`).
+        if outcome.exitCode == 0, json == false, robot == false, case .pretty(let palette) = resolved.appearance,
+            let home = CLIProcess.home()
+        {
+            CeremonyCLI.write(outcome)
+            _ = await SetupKeysRun.run(
+                .afterSetup, home: home, environment: CLIProcess.environment(), secrets: .live(home: home),
+                palette: palette)
+            throw ExitCode(outcome.exitCode)
+        }
         try CeremonyCLI.emit(outcome)
     }
 

@@ -12,7 +12,8 @@ import RVDomain
 /// managed policy, setting a host to anything but `block`
 /// (`rv host mode <host> observe|off`), moving files across a workspace's
 /// wall (`rv workspace upload|download`), or switching rv to observe
-/// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
+/// (`rv setup --observe`), or moving found keys into rv's store
+/// (`rv setup keys`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule. A bare
 /// help request (`rv uninstall --help`, `isHelpPageRequest`) runs nothing
@@ -217,7 +218,7 @@ private let xargsExecNames: Set<String> = plainLaunchers.union(shellNames).union
 private let weakeningWords: Set<String> = subcommandVerbs.union([
     "uninstall", "setup", "--observe", "--save", "apply", "draft", "rollback", "disable", "add",
     "add-command", "redeem", "mint", "approve", "trust", "set", "remove", "import", "oauth-reset",
-    "hook", "sign", "mode", "ceiling", "upload", "download",
+    "hook", "sign", "mode", "ceiling", "upload", "download", "keys",
 ])
 
 /// Past this many words or characters, the uncertain scan (quadratic in
@@ -424,8 +425,10 @@ private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
     // `setup --observe` sheds oversight; a variable or glob may carry the flag.
+    // `setup keys` moves the owner's keys into rv's store: owner only, like
+    // `secrets set`, so the agent never picks which value rv keeps.
     if verb == "setup" {
-        return args[(verbIndex + 1)...].contains { $0 == "--observe" || isUnmodelledWord($0) }
+        return args[(verbIndex + 1)...].contains { $0 == "--observe" || $0 == "keys" || isUnmodelledWord($0) }
     }
     guard subcommandVerbs.contains(verb) else { return false }
     let rest = Array(args[(verbIndex + 1)...])

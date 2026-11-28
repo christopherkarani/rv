@@ -31,12 +31,18 @@ enum CeremonyCLI {
     }
 
     static func emit(_ outcome: SetupOutcome) throws -> Never {
+        write(outcome)
+        throw ExitCode(outcome.exitCode)
+    }
+
+    /// The outcome's text, without exiting: a step that follows setup
+    /// (the keys step) prints after it.
+    static func write(_ outcome: SetupOutcome) {
         if outcome.emitted == false, outcome.stdout.isEmpty == false {
             CommandContext.writeStdout(outcome.stdout)
         }
         if outcome.stderr.isEmpty == false {
             CommandContext.writeStderr(outcome.stderr)
         }
-        throw ExitCode(outcome.exitCode)
     }
 }

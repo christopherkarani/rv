@@ -301,4 +301,22 @@ struct RVDLifecycleGuardTests {
     func setupObserve(command: String, flagged: Bool) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == flagged, "\(command)")
     }
+
+    /// `rv setup keys` moves the owner's keys into rv's store: owner only,
+    /// in every spelling an agent might try; its help page stays readable.
+    @Test("rv setup keys is owner-only", arguments: [
+        ("rv setup keys", true),
+        ("rv setup --force keys", true),
+        ("rv-cli setup keys", true),
+        ("/home/me/.local/bin/rv setup keys", true),
+        ("script -q /dev/null rv setup keys", true),
+        ("sh -c 'rv setup keys'", true),
+        ("echo rv setup keys | sh", true),
+        ("rv setup k*", true),
+        ("rv setup keys --help", false),
+        ("rv help setup", false),
+    ])
+    func setupKeys(command: String, flagged: Bool) {
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == flagged, "\(command)")
+    }
 }
