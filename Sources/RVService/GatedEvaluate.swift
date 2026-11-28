@@ -117,6 +117,19 @@ public struct GatedEvaluate: Sendable {
         self.judge = judge
     }
 
+    private init(source: Source, judge: any JudgePort) {
+        self.source = source
+        self.judge = judge
+    }
+
+    /// This door's session and rules with no judge (`SaferVetNoJudge`): a
+    /// call that would reach the judge reads it as unavailable, so it never
+    /// waits on a slot or a model load, never takes an admission slot from
+    /// a real call, and never logs a late answer.
+    func withoutJudge() -> GatedEvaluate {
+        GatedEvaluate(source: source, judge: SaferVetNoJudge())
+    }
+
     /// Creates a door that defers session construction until first use, then reuses it.
     package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
         self.source = .deferred(

@@ -5,6 +5,7 @@ const RV_HOOK_TIMEOUT_MS = 15000;
 const RV_DECISION_TYPE = "rv-decision";
 const RV_BLOCK_WIDGET = "rv-block";
 const RV_DISPLAY_BRAND = "RV";
+const RV_STOP_GLYPH = "\u2715";
 const RV_STOPPED_TITLE = "\u2715 Stopped";
 const RV_STOP_PREFIX = "\u2715 Stopped   ";
 const RV_STOP_LABEL_WIDTH = 8;
@@ -127,10 +128,13 @@ function buildThemedDecisionLines(card, theme, width) {
   const contentWidth = Number.isFinite(n) && n > 0 ? n : 72;
   if (Array.isArray(card.stop)) {
     // rv's stop as rv wrote it: the verdict line is the title, then
-    // why / safer / who, one per line, each said once.
-    const lines = [fg("error", bold(card.title))];
+    // why / safer / who, one per line, each said once. Only the glyph
+    // carries colour; every word stays plain.
+    const title = String(card.title);
+    const glyph = title.startsWith(RV_STOP_GLYPH) ? fg("error", RV_STOP_GLYPH) + title.slice(RV_STOP_GLYPH.length) : title;
+    const lines = [glyph];
     for (const line of card.stop) {
-      lines.push(...wrapStopLine(line, contentWidth).map((part) => fg("dim", part.slice(0, RV_STOP_LABEL_WIDTH)) + part.slice(RV_STOP_LABEL_WIDTH)));
+      lines.push(...wrapStopLine(line, contentWidth));
     }
     return lines;
   }

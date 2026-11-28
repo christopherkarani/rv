@@ -71,21 +71,26 @@ extension GatedEvaluate {
     /// Whether a stop may offer `command` as its `safer` line: this door
     /// allows it here (this cwd, this home's packs and mode), and under
     /// watch mode enforce would allow it too, so the advice is never a
-    /// command rv itself stops. Decided as a peek on the rules alone (no
-    /// allow-once grant, no allowlist entry counts), and its effects are
-    /// dropped: vetting advice writes no audit, judge or ledger row.
-    package func allowsSaferCommand(
+    /// command rv itself stops. Decided as a peek on the rules alone: no
+    /// allow-once grant or allowlist entry counts, and no judge runs (the
+    /// door is `withoutJudge()`, whichever judge this one has). Its effects
+    /// are dropped, so vetting advice writes no audit, judge or ledger row.
+    /// `inputs` are the stop's own, when its caller kept them; otherwise
+    /// they are read for this cwd.
+    func allowsSaferCommand(
         _ command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
-        now: Date
+        now: Date,
+        inputs: EvaluationInputs? = nil
     ) async -> Bool {
+        let door = withoutJudge()
         let decided = await HookTiming.$current.withValue(nil) {
-            await decideVerdict(
+            await door.decideVerdict(
                 .peek, Self.makeRequest(command: command, home: home), cwd: cwd, home: home,
                 grants: EphemeralAllowOnceTable(), now: now, allowlist: { AllowlistSnapshot(entries: []) },
                 host: .tty, tool: .bash, previewsWouldBe: true,
-                inputs: Self.liveInputs(home: home, cwd: cwd)
+                inputs: inputs ?? Self.liveInputs(home: home, cwd: cwd)
             )
         }
         let wouldBe = decided.wouldBe?.result.decision ?? decided.result.decision
@@ -93,9 +98,9 @@ extension GatedEvaluate {
     }
 }
 
-/// The judge the hook-local pass vets a safer command with: none. A safer
-/// command the judge would have to read is not one the pass can vouch for,
-/// so its `safer` line is left out.
+/// The judge a safer command is vetted with, in rvd and the hook-local
+/// pass: none. Vetting advice must not hold a stop on the judge, take its
+/// slots, or leave a judge-log row for a command nobody ran.
 struct SaferVetNoJudge: JudgePort {
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
         .unavailable("a safer command is vetted without the judge")
@@ -103,7 +108,8 @@ struct SaferVetNoJudge: JudgePort {
 }
 
 extension LiveEvaluateWorld {
-    /// rvd's vet of a stop's safer command (`GatedEvaluate.allowsSaferCommand`).
+    /// rvd's vet of a stop's safer command (`GatedEvaluate.allowsSaferCommand`,
+    /// with no judge).
     package func allowsSaferCommand(_ command: ShellCommand, cwd: WorkingDirectory?) async -> Bool {
         await vettingDoor.allowsSaferCommand(command, cwd: cwd, home: home, now: Date())
     }

@@ -497,7 +497,11 @@ obj = json.loads(text.splitlines()[-1])
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
 reason = str(obj.get("reason") or "")
-if "Destroys uncommitted changes" not in reason:
+# B1 stop shape: verdict line with the rule id, then the why.
+def is_reset_hard_stop(text):
+    return (text.startswith("\u2715 Stopped   ") and "(core.git/reset-hard)" in text
+            and "\nwhy     destroys uncommitted changes" in text)
+if not is_reset_hard_stop(reason):
     raise SystemExit("reason=%r" % reason)
 PY
 printf 'AC-ATTACH-GROK-DENY ok\n'
@@ -530,10 +534,15 @@ if st != 2:
 obj = json.loads(text.splitlines()[-1])
 if obj.get("decision") != "block":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
-if "Destroys uncommitted changes" not in str(obj.get("reason") or ""):
+# B1 stop shape: verdict line with the rule id, then the why.
+def is_reset_hard_stop(text):
+    return ("\u2715 Stopped   " in text and "(core.git/reset-hard)" in text
+            and "\nwhy     destroys uncommitted changes" in text)
+reason = str(obj.get("reason") or "")
+if not reason.startswith("\u2715 Stopped   ") or not is_reset_hard_stop(reason):
     raise SystemExit("reason=%r" % obj.get("reason"))
-if "Destroys uncommitted changes" not in stderr:
-    raise SystemExit("stderr missing reason")
+if not is_reset_hard_stop(stderr):
+    raise SystemExit("stderr missing the stop: %r" % stderr)
 if "permissionDecision" in text:
     raise SystemExit("Claude permission deny")
 PY

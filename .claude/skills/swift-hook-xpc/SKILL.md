@@ -94,7 +94,7 @@ who     ask Chris to run  rv allow-once a1b2c3
 
 `why` is under ten words; `safer` only when the pack has a
 `safer_command` and rv allows it in that cwd and mode (`HookEvaluateWorld.saferAllowed`,
-a peek that writes nothing); exactly one `who` (the owner's passwd first name, or
+a peek with no judge that writes nothing); exactly one `who` (the owner's passwd first name, or
 "your user"), and no stop tells the agent to run an unlock itself. The C
 hook (`hook_fallback.c`) prints the same shape for daemon-down stops.
 

@@ -68,6 +68,54 @@ struct SaferCommandModeTests {
         #expect(shown > 0)
     }
 
+    /// The vet never reaches the judge: with a judge bundle selected (so
+    /// the door would ask it about most safer commands, as the control run
+    /// shows), in guard and in watch mode, it makes no judge call, waits on
+    /// no slot and logs nothing. Only `cat /proc/mdstat` (the six mdadm
+    /// rules, outside a repository) is left out.
+    @Test(arguments: [GuardMode.enforce, .observe])
+    func theVetNeverReachesTheJudge(_ mode: GuardMode) async throws {
+        let home = try Self.home(mode: mode == .observe ? "observe" : nil)
+        defer { remove(home) }
+        let cwd = try #require(WorkingDirectory(validating: home.rawValue))
+        let bundle = URL(fileURLWithPath: home.rawValue).appendingPathComponent("laya-bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let inputs = EvaluationInputs(
+            guardMode: mode, judge: JudgeSelection(engine: .ft, bundle: bundle, shadow: false),
+            store: .gather(home: home, cwd: cwd))
+        let safer = try Self.saferCommands()
+
+        // Control: the same door, deciding as usual, does ask the judge.
+        let control = CountingJudge()
+        let judged = GatedEvaluate(EvaluateSession(), judge: control)
+        for (_, command) in safer {
+            _ = await judged.decideVerdict(
+                .peek, GatedEvaluate.makeRequest(command: ShellCommand(rawValue: command), home: home),
+                cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+                allowlist: { AllowlistSnapshot(entries: []) }, host: .tty, tool: .bash,
+                previewsWouldBe: true, inputs: inputs)
+        }
+        #expect(control.calls > 0)
+
+        let counting = CountingJudge()
+        let door = GatedEvaluate(EvaluateSession(), judge: counting)
+        var dropped: Set<String> = []
+        for (rule, command) in safer {
+            let shown = await door.allowsSaferCommand(
+                ShellCommand(rawValue: command), cwd: cwd, home: home, now: Self.now, inputs: inputs)
+            if shown == false { dropped.insert(rule) }
+        }
+        #expect(counting.calls == 0)
+        #expect(dropped == Self.mdadmRules, "\(dropped.sorted())")
+    }
+
+    /// `cat /proc/mdstat`, outside a repository, is stopped by
+    /// `builtin.action:unresolved-path`: the vet leaves these out.
+    private static let mdadmRules: Set<String> = [
+        "system.disk:mdadm-create", "system.disk:mdadm-fail", "system.disk:mdadm-grow",
+        "system.disk:mdadm-remove", "system.disk:mdadm-stop", "system.disk:mdadm-zero-superblock",
+    ]
+
     /// End to end through rvd's hook door: a stop whose safer command rv
     /// allows shows it; one whose safer command rv would stop shows none.
     @Test func theHookDoorShowsOnlyAllowedSaferCommands() async throws {
@@ -132,5 +180,16 @@ struct SaferCommandModeTests {
             #expect(notice.safer == command, "\(rule)")
             #expect(notice.text.split(separator: "\n").count == 4, "\(rule)")
         }
+    }
+}
+
+/// A judge that counts its calls and answers unavailable.
+private final class CountingJudge: JudgePort, Sendable {
+    private let count = UnfairLock(0)
+    var calls: Int { count.withLock { $0 } }
+
+    func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
+        count.withLock { $0 += 1 }
+        return .unavailable("counted")
     }
 }

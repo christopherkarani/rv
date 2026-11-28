@@ -137,8 +137,13 @@ struct LogCommandTests {
         // rv blocks lists every row, judge notes included, in its own words.
         #expect(blocks.components(separatedBy: "core.judge:laya-block").count == 3)
         // #674 gave rv blocks its own ✕ Stopped / ◐ Would stop rows, so
-        // rv log's columns are what must stay out.
-        #expect(blocks.contains("would_be") == false)
+        // the glyphs are shared; what rv log prints of its own (its summary
+        // line, its next-step line) must stay out of rv blocks.
+        let log = try output(home)
+        for own in ["2 judge notes in shadow", "→ rv log --all   every row"] {
+            #expect(log.contains(own), "rv log prints \(own)")
+            #expect(blocks.contains(own) == false, "rv blocks must not print \(own)")
+        }
     }
 
     // MARK: - rvd's decision log

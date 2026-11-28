@@ -97,6 +97,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("\\u2715 Stopped"))
     #expect(source.contains("function stopLines"))
     #expect(source.contains("· Blocked") == false)
+    // Only the ✕ glyph is coloured on the stop card; every word is plain.
+    #expect(source.contains("fg(\"error\", RV_STOP_GLYPH)"))
+    #expect(source.contains("fg(\"error\", bold(card.title))") == false)
 }
 
 @Test func openCodeTemplate_registersExecuteBeforeAndShellEnv() throws {
