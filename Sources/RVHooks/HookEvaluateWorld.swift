@@ -27,6 +27,10 @@ public struct HookEvaluateWorld: Sendable {
     /// too. Nil (tests, worlds with no advice) shows the voice's advice as
     /// it is.
     public var saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)?
+    /// B4: the facts rv tells an agent at session start, for the session's
+    /// cwd. Nil (the port, or its answer) sends no house rules: the event
+    /// passes like a foreign one. Read-only; it never changes policy.
+    public var houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)?
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
@@ -37,7 +41,8 @@ public struct HookEvaluateWorld: Sendable {
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
         )? = nil,
         voice: StopVoice = .plain,
-        saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)? = nil
+        saferAllowed: (@Sendable (ShellCommand, WorkingDirectory?) async -> Bool)? = nil,
+        houseRules: (@Sendable (WorkingDirectory?) async -> HouseRules?)? = nil
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
@@ -46,5 +51,6 @@ public struct HookEvaluateWorld: Sendable {
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
         self.voice = voice
         self.saferAllowed = saferAllowed
+        self.houseRules = houseRules
     }
 }

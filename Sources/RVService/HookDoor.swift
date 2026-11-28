@@ -211,7 +211,14 @@ extension HookEvaluateWorld {
                 )
             },
             voice: voice,
-            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) }
+            saferAllowed: { safer, cwd in await world.allowsSaferCommand(safer, cwd: cwd) },
+            // B4: the session-start house rules, read with rvd's own
+            // launch environment so the mode named is the one enforced.
+            houseRules: { cwd in
+                HouseRules.gather(
+                    home: world.home, cwd: cwd, host: host,
+                    environment: ProcessInfo.processInfo.environment)
+            }
         ))
     }
 
@@ -239,7 +246,8 @@ extension HookEvaluateWorld {
             },
             mintOnDenyWithCommand: mintWithCommand,
             voice: world.voice,
-            saferAllowed: world.saferAllowed
+            saferAllowed: world.saferAllowed,
+            houseRules: world.houseRules
         )
     }
 }
