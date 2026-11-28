@@ -258,6 +258,19 @@ struct ObserveWouldBeTests {
         ("sh -c 'git reset --hard; rm -rf /usr/*'", "✕ Stopped, in every mode"),
         ("bash -c 'git push --force origin main; dd if=/dev/zero of=/dev/sda'", "✕ Stopped, in every mode"),
         ("zsh -c 'git reset --hard && rm -rf ~'", "✕ Stopped, in every mode"),
+        // Nested payloads in `shlex.quote` form ('\'' and '"'"'), at depth 2 to 4.
+        (#"sh -c 'sh -c '\''rm -rf /usr'\'''"#, "✕ Stopped, in every mode"),
+        (#"sh -c 'sh -c '\''git reset --hard; rm -rf ~'\'''"#, "✕ Stopped, in every mode"),
+        (#"sh -c 'sh -c '"'"'rm -rf /usr'"'"''"#, "✕ Stopped, in every mode"),
+        (#"sh -c 'sh -c '\''sh -c '\''\'\'''\''git reset --hard; rm -rf /usr'\''\'\'''\'''\'''"#, "✕ Stopped, in every mode"),
+        (#"sh -c 'sh -c '\''sh -c '\''\'\'''\''sh -c '\''\'\'''\''\'\''\'\'''\'''\''\'\'''\''rm -rf ~'\''\'\'''\''\'\''\'\'''\'''\''\'\'''\'''\''\'\'''\'''\'''"#, "✕ Stopped, in every mode"),
+        // Home through a parameter expansion that still names it.
+        ("rm -rf ${HOME:?}/", "✕ Stopped, in every mode"),
+        (#"rm -rf "${HOME:?}"/"#, "✕ Stopped, in every mode"),
+        (#"rm -rf "${HOME:?}""#, "✕ Stopped, in every mode"),
+        ("rm -rf ${HOME:-/tmp}/", "✕ Stopped, in every mode"),
+        ("git reset --hard; rm -rf ${HOME:?}/", "✕ Stopped, in every mode"),
+        ("rm -rf ${HOME:?}/..", "✕ Stopped, in every mode"),
         // A root delete with no analyzed target reads its words.
         ("echo x | xargs -I{} rm -rf ~/{}", "✕ Stopped, in every mode"),
         ("echo x | xargs rm -rf ~", "✕ Stopped, in every mode"),
@@ -283,6 +296,9 @@ struct ObserveWouldBeTests {
         ("sh -c 'git reset --hard; rm -rf ~/project/build'", "◐ Would stop"),
         ("bash -c 'git reset --hard'", "◐ Would stop"),
         ("cd $PROJ && echo x | xargs rm -rf ~/project/build", "◐ Would stop"),
+        (#"sh -c 'sh -c '\''sh -c '\''\'\'''\''git reset --hard; rm -rf ~/project/build'\''\'\'''\'''\'''"#, "◐ Would stop"),
+        ("rm -rf ${HOME:?}/project/build", "◐ Would stop"),
+        ("git reset --hard; rm -rf ${HOME}/project/build", "◐ Would stop"),
         ("git reset --hard", "◐ Would stop"),
         ("git push --force origin main", "◐ Would stop"),
         ("touch /etc/rv-watch-test", "◐ Would stop"),
@@ -299,6 +315,18 @@ struct ObserveWouldBeTests {
         } else {
             #expect(decision == words, "\(command): \(line)")
         }
+        #expect(explain.exitCode == 0)
+    }
+
+    /// Payload reading only adds catastrophes: a nested delete below the
+    /// working tree never stops, whatever guard mode says of it.
+    @Test("watch mode never stops a nested delete of a build folder", arguments: [
+        #"sh -c 'sh -c '\''rm -rf ./build'\'''"#, #"bash -c 'bash -c '\''rm -rf ~/project/build'\'''"#,
+    ])
+    func nestedBuildDeleteRuns(command: String) async throws {
+        let explain = try await Self.run(.explain, command, observe: true, columns: 200)
+        let line = explain.stdout.split(separator: "\n").first { $0.contains("Decision: ") }.map(String.init) ?? ""
+        #expect(!line.contains("✕"), "\(command): \(line)")
         #expect(explain.exitCode == 0)
     }
 

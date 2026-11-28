@@ -213,20 +213,52 @@ enum ObserveCatastrophe {
 
     // MARK: Roots
 
-    /// `/`, home, or a top-level system directory, after trailing `/*`
-    /// globs and slashes are dropped (`/usr/*` and `/usr/` are `/usr`).
+    /// `/`, home, or a top-level system directory, read lexically: quotes
+    /// dropped, trailing `/*` globs, slashes and `/.` dropped (`/usr/*` and
+    /// `/usr/` are `/usr`), and a trailing `/..` names the parent (`~/..`,
+    /// `/usr/local/..`). Home is `~`, `$HOME`, `${HOME}` or any
+    /// `${HOME…}` expansion that still names it (`${HOME:?}`,
+    /// `${HOME:-/tmp}`, `${HOME%/}`); `${HOME}/x` is below it.
     private static func isRoot(_ path: String, home: HomeDirectory?) -> Bool {
-        var trimmed = path
+        var trimmed = path.filter { $0 != "'" && $0 != "\"" }
+        var parents = 0
         while true {
             if trimmed.hasSuffix("/*") { trimmed.removeLast(2); continue }
+            if trimmed.hasSuffix("/..") { trimmed.removeLast(3); parents += 1; continue }
+            if trimmed.hasSuffix("/.") { trimmed.removeLast(2); continue }
             if trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast(); continue }
-            break
+            guard parents > 0 else { break }
+            // The parent of `/` or of home is a root too.
+            if trimmed.isEmpty || isHomeWord(trimmed) { return true }
+            guard let slash = trimmed.lastIndex(of: "/") else { return false }
+            trimmed = String(trimmed[..<slash])
+            parents -= 1
         }
         if trimmed.isEmpty { trimmed = "/" }
-        if systemRoots.contains(trimmed) || ["~", "$HOME", "${HOME}"].contains(trimmed) { return true }
+        if systemRoots.contains(trimmed) || isHomeWord(trimmed) { return true }
         guard let home else { return false }
         var homePath = home.rawValue
         while homePath.count > 1, homePath.hasSuffix("/") { homePath.removeLast() }
         return trimmed == homePath
+    }
+
+    /// `~`, `$HOME`, `${HOME}`, or `${HOME` with an operator that leaves
+    /// home or one of its parents (`:?`, `?`, `:-`, `-`, `:=`, `=`, `:+`,
+    /// `+`, `%`), closed by the word's last brace. Never `${HOME_DIR}` or
+    /// `${HOME#/}`.
+    private static func isHomeWord(_ word: String) -> Bool {
+        if word == "~" || word == "$HOME" || word == "${HOME}" { return true }
+        guard word.hasPrefix("${HOME") else { return false }
+        let rest = word.dropFirst("${HOME".count)
+        guard let first = rest.first, ":?-=+%".contains(first) else { return false }
+        var depth = 1
+        for (offset, char) in rest.enumerated() {
+            if char == "{" { depth += 1 }
+            if char == "}" {
+                depth -= 1
+                if depth == 0 { return offset == rest.count - 1 }
+            }
+        }
+        return false
     }
 }

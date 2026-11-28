@@ -135,7 +135,10 @@ enum ObserveFloor {
         // (`sh -c 'git reset --hard; rm -rf /usr/*'`): each is read on its
         // own, and the first catastrophic one is enforced under its own rule.
         if case .deny = result.decision, let verdict = context.segmentVerdict {
-            for segment in catastropheSegments(command) {
+            guard let segments = catastropheSegments(command, inTime: { clock.now < deadline }) else {
+                return .enforce(unanalyzable(result))
+            }
+            for segment in segments {
                 guard clock.now < deadline else { return .enforce(unanalyzable(result)) }
                 let read = verdict(ShellCommand(rawValue: segment))
                 if ObserveCatastrophe.isCatastrophic(read, command: segment, home: context.home) {
@@ -153,17 +156,25 @@ enum ObserveFloor {
         return .observed
     }
 
-    /// The commands read on their own for a catastrophe: every simple
-    /// command the text launches (`launchedCommands`: chains, pipes,
-    /// launchers, and `sh`/`bash`/`zsh -c` or `eval` payloads), rejoined as
-    /// shell words, and the outer segments of a compound command as
-    /// written; once each, never the whole command again.
-    private static func catastropheSegments(_ command: ShellCommand) -> [String] {
+    /// The commands read on their own for a catastrophe, once each and
+    /// never the whole command again: for the command and for each shell
+    /// or `eval` payload in it (`ObserveShellPayloads`, which reads the
+    /// `'\''` quoting the launcher parser does not), the payload itself,
+    /// every simple command it launches (`launchedCommands`: chains,
+    /// pipes, launchers, nested payloads), rejoined as shell words, and its
+    /// outer segments as written. nil: the budget ran out while reading.
+    private static func catastropheSegments(_ command: ShellCommand, inTime: () -> Bool) -> [String]? {
         func nonEmpty(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
-        let launched = launchedCommands(command.rawValue).map(shellText).filter(nonEmpty)
-        let outer = shellChainSegments(command.rawValue).filter(nonEmpty)
         var seen: Set<String> = [command.rawValue]
-        return (launched + (outer.count > 1 ? outer : [])).filter { seen.insert($0).inserted }
+        var segments: [String] = []
+        for text in [command.rawValue] + ObserveShellPayloads.payloads(command.rawValue) {
+            guard inTime() else { return nil }
+            let launched = launchedCommands(text).map(shellText).filter(nonEmpty)
+            let outer = shellChainSegments(text).filter(nonEmpty)
+            let candidates = [text].filter(nonEmpty) + launched + (outer.count > 1 ? outer : [])
+            segments += candidates.filter { seen.insert($0).inserted }
+        }
+        return segments
     }
 
     /// argv as one shell command: a word with blanks, quotes or shell
