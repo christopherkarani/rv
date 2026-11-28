@@ -199,17 +199,40 @@ public struct BoxTidyOutcome: Sendable, Equatable {
 }
 
 extension BoxTidy {
-    /// Carries out `plan`. An attached image is detached first (never
-    /// forced); one that will not detach stays attached and is not moved.
-    /// With `moving` false only the expired trash is emptied.
+    /// The plan to carry out after the yes: `rescanned` (read again once
+    /// the answer came), limited to what the person was asked about. A
+    /// leftover that a box claimed meanwhile is no longer a move in
+    /// `rescanned`, so it stays; one that showed up only now waits for the
+    /// next run. `rescanned`'s hold, if any, wins.
+    public static func confirm(_ asked: BoxTidyPlan, rescanned: BoxTidyPlan) -> BoxTidyPlan {
+        let askedMoves = Set(asked.moves.map(\.path))
+        let askedExpired = Set(asked.expired.map(\.path))
+        return BoxTidyPlan(
+            kept: rescanned.kept,
+            moves: rescanned.moves.filter { askedMoves.contains($0.path) && asked.moves.contains($0) },
+            expired: rescanned.expired.filter { askedExpired.contains($0.path) },
+            hold: rescanned.hold)
+    }
+
+    /// Carries out `plan`, after a yes. An attached image is detached
+    /// first (never forced); one that will not detach stays attached and is
+    /// not moved. Right before each rename, and before each trash entry is
+    /// emptied, `attachedNow` reads the file names of every image attached
+    /// at that moment (nil when it cannot tell): a leftover that is
+    /// attached, or whose state is unknown, stays where it is.
     public static func apply(
-        _ plan: BoxTidyPlan, moving: Bool, trash: BoxTrash, now: Date,
+        _ plan: BoxTidyPlan, trash: BoxTrash, now: Date,
+        attachedNow: () -> Set<String>?,
         detach: (String) -> Bool
     ) -> BoxTidyOutcome {
         var outcome = BoxTidyOutcome()
-        if moving, plan.hold == nil {
+        if plan.hold == nil {
             for item in plan.moves {
                 if case .attachedImage(_, let device) = item, detach(device) == false {
+                    outcome.stayed += 1
+                    continue
+                }
+                guard let attached = attachedNow(), attached.contains(fileName(item.path)) == false else {
                     outcome.stayed += 1
                     continue
                 }
@@ -219,7 +242,20 @@ extension BoxTidy {
                 }
             }
         }
-        for entry in plan.expired where trash.empty(entry) { outcome.emptied += 1 }
+        for entry in plan.expired where trash.empty(entry, attachedNames: attachedNow()) { outcome.emptied += 1 }
         return outcome
+    }
+}
+
+extension WorkspaceLifecycleLog {
+    /// For `rv box tidy`: true when the log is missing (no history) or
+    /// every line decodes. A line that does not (torn at the end, or
+    /// corrupt inside) may be a record naming an image, so tidy holds.
+    static func readsCleanly(at url: URL) -> Bool {
+        switch load(at: url) {
+        case .missing: true
+        case .unreadable: false
+        case .decoded(let read): read.tornTrailing == false && read.interiorCorruption == false
+        }
     }
 }

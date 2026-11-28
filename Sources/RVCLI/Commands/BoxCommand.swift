@@ -32,7 +32,7 @@ struct BoxCommand: AsyncParsableCommand {
             description: "Run any command in the box"),
         HelpRow(name: "rv box list [--json]", description: "Every box, any strength, newest first; --json writes schema rv.boxes.v1"),
         HelpRow(name: "rv box setup mac", description: "Build the Mac box image now, in the foreground (about 26 GB)"),
-        HelpRow(name: "rv box tidy [--yes]", description: "Move old box images to a 7-day trash; boxes with unsaved work are never touched"),
+        HelpRow(name: "rv box tidy [--yes]", description: "Move old box images to a 7-day trash; boxes with unsaved work are never touched. --yes answers the one question, so a script or an agent may run it"),
     ]
 
     static let flags = [

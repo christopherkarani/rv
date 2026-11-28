@@ -27,10 +27,11 @@ extension WorkspaceHosts {
         }
         let lifecycleLog = WorkspaceHostLocation.lifecycleLog(in: directory)
         let named = namedImages(lifecycleLog: lifecycleLog)
-        // A log with bytes but no record rv can read is torn or corrupt:
-        // which images a box names is then unknown, so nothing moves.
-        let logBytes = (try? FileManager.default.attributesOfItem(atPath: lifecycleLog.path))?[.size] as? Int ?? 0
-        let logRead = logBytes == 0 || WorkspaceLifecycleLog.records(at: lifecycleLog).isEmpty == false
+        // A log rv cannot read in full (unreadable, or any line that does
+        // not decode, torn at the end or corrupt inside) may hide a record
+        // that names an image: which images a box names is then unknown,
+        // so nothing moves.
+        let logRead = WorkspaceLifecycleLog.readsCleanly(at: lifecycleLog)
         let unclosed = unclosedWorkspaces()
         let boxes = unclosed.map { found -> BoxTidyBox in
             let state: BoxTidyBox.State
@@ -49,6 +50,17 @@ extension WorkspaceHosts {
         return BoxTidyScan(boxes: boxes, imageFiles: imageFiles, attachedImages: attached,
                            attachedKnown: disk.attachedKnown && logRead, trash: trash.entries(),
                            alsoKept: everyNamed)
+    }
+
+    /// File names of every disk image attached right now, rv's or not;
+    /// nil when `hdiutil info` cannot be read. `rv box tidy` asks this
+    /// right before each rename and before emptying each trash entry.
+    public static func attachedImageNames() -> Set<String>? {
+        guard let data = hdiutilInfo(),
+            let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let images = root["images"] as? [[String: Any]]
+        else { return nil }
+        return Set(images.compactMap { $0["image-path"] as? String }.map { ($0 as NSString).lastPathComponent })
     }
 
     /// Image paths each unclosed workspace's records name.

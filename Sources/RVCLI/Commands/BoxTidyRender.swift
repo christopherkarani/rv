@@ -9,7 +9,7 @@ private typealias Glyph = CommandVocabulary.Glyph
 ///
 /// ```
 /// ◆ rv 3 boxes never finished · 253 old images
-///   ◐ ~/code/app    may hold unsaved work · Nov 19 · rv workspace start --workspace ~/code/app
+///   ◐ ~/code/app    may hold unsaved work · Nov 19 · cd ~/code/app && rv box
 ///   Move 253 to trash? Boxes with unsaved work stay. y/n
 ///   ✓ Tidied · trash empties in 7 days
 /// ```
@@ -25,9 +25,10 @@ enum BoxTidyRender {
         if plan.moves.isEmpty == false {
             facts.append("\(plan.moves.count) old \(plan.moves.count == 1 ? "image" : "images")")
         }
-        guard facts.isEmpty == false else {
-            return plan.expired.isEmpty ? "\(Glyph.done.rawValue) Nothing to tidy.\n" : ""
+        if plan.expired.isEmpty == false {
+            facts.append("\(plan.expired.count) in the trash past \(BoxTidy.trashDays) days")
         }
+        guard facts.isEmpty == false else { return "\(Glyph.done.rawValue) Nothing to tidy.\n" }
         var lines = ["\(Glyph.rv.rawValue) rv \(facts.joined(separator: " · "))"]
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -57,22 +58,29 @@ enum BoxTidyRender {
         }
     }
 
-    /// The one yes. Asked only when something would move.
+    /// The one yes. Asked only when something would move or be emptied:
+    /// emptying the expired trash waits for a yes too.
     static func question(_ plan: BoxTidyPlan) -> String {
         let listed = unfinished(plan)
         let stays = listed.isEmpty
             ? ""
             : listed.count == 1 ? " The box with unsaved work stays." : " Boxes with unsaved work stay."
-        return "  Move \(plan.moves.count) to trash?\(stays) y/n "
+        let ask = switch (plan.moves.count, plan.expired.count) {
+        case (let moves, 0): "Move \(moves) to trash?"
+        case (0, let expired): "Empty \(expired) from the trash for good?"
+        case (let moves, let expired): "Move \(moves) to trash and empty \(expired) for good?"
+        }
+        return "  \(ask)\(stays) y/n "
     }
 
-    /// No terminal to ask on: say what would move and the command that
-    /// moves it.
-    static let notAsked = "  \(Glyph.next.rawValue) to move them: rv box tidy --yes\n"
+    /// No terminal to ask on: nothing changes; say the command that tidies.
+    static let notAsked = "  \(Glyph.next.rawValue) nothing changed; to tidy: rv box tidy --yes\n"
 
     static let declined = "  Nothing moved.\n"
 
-    static func done(_ outcome: BoxTidyOutcome) -> String {
+    /// `asked`: how many leftovers the question named. When fewer were
+    /// acted on (a box claimed one after the yes), the rest wait.
+    static func done(_ outcome: BoxTidyOutcome, asked: Int? = nil) -> String {
         var text = ""
         if outcome.moved > 0 || outcome.emptied > 0 {
             var parts = ["\(Glyph.done.rawValue) Tidied"]
@@ -86,6 +94,13 @@ enum BoxTidyRender {
             text += "  \(Glyph.watched.rawValue) \(outcome.stayed) could not move: still in use or on another disk.\n"
             text += "  \(Glyph.next.rawValue) rv workspace leftovers\n"
         }
+        if let asked {
+            let left = asked - outcome.moved - outcome.emptied - outcome.stayed
+            if left > 0 {
+                text += "  \(Glyph.watched.rawValue) \(left) left alone: in use since you were asked.\n"
+            }
+        }
+        if text.isEmpty { text = "  Nothing moved.\n" }
         return text
     }
 
@@ -103,9 +118,11 @@ enum BoxTidyRender {
         }
     }
 
-    /// The command that finishes an unfinished box (it recovers on start).
+    /// The command that finishes an unfinished box: `rv box` in its
+    /// folder recovers it on start. (`rv box <path>` would run the path as
+    /// a command, so the line changes folder first.)
     static func next(_ box: BoxTidyBox, home: String?) -> String? {
         guard box.state == .unfinished else { return nil }
-        return "rv workspace start --workspace \(BoxPlan.shellPath(box.project, home: home))"
+        return "cd \(BoxPlan.shellPath(box.project, home: home)) && rv box"
     }
 }
