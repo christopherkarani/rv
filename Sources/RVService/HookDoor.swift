@@ -210,7 +210,8 @@ extension HookEvaluateWorld {
                     rawCommand: command.rawValue
                 )
             },
-            voice: voice
+            voice: voice,
+            countStop: { key in StopStreakCounter.shared.record(key, now: clock()) }
         ))
     }
 
@@ -237,7 +238,12 @@ extension HookEvaluateWorld {
                 try await world.recordHostAsk(request, action)
             },
             mintOnDenyWithCommand: mintWithCommand,
-            voice: world.voice
+            voice: world.voice,
+            // A stop the agent never sees (the reply missed its deadline)
+            // is not counted toward its streak.
+            countStop: world.countStop.map { count in
+                { @Sendable key in HookDeadline.permitsSideEffects() ? count(key) : 0 }
+            }
         )
     }
 }

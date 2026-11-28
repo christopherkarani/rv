@@ -38,10 +38,16 @@ public struct StopVoice: Sendable {
     public var owner: OwnerName
     /// The pack advice for a rule id, or nil.
     public var advice: @Sendable (RuleID) -> StopAdvice?
+    /// How many stops of this rule the session has hit in a row, this one
+    /// included (B5); 0 when nothing counted.
+    public var streak: Int
 
-    public init(owner: OwnerName, advice: @escaping @Sendable (RuleID) -> StopAdvice? = { _ in nil }) {
+    public init(
+        owner: OwnerName, advice: @escaping @Sendable (RuleID) -> StopAdvice? = { _ in nil }, streak: Int = 0
+    ) {
         self.owner = owner
         self.advice = advice
+        self.streak = streak
     }
 
     /// No name ("your user") and no pack advice.
@@ -64,10 +70,12 @@ public struct StopNotice: Sendable, Equatable {
     public var safer: String?
     /// Who acts ("ask Chris to run  rv allow-once a1b2c3").
     public var who: String
+    /// The third-try note (B5, `stopStreakNote`), or nil.
+    public var again: String?
 
     public init(
         verdict: String = CommandVocabulary.Glyph.stopped.word,
-        subject: String?, rule: String, why: String, safer: String? = nil, who: String
+        subject: String?, rule: String, why: String, safer: String? = nil, who: String, again: String? = nil
     ) {
         self.verdict = verdict
         self.subject = subject
@@ -75,6 +83,7 @@ public struct StopNotice: Sendable, Equatable {
         self.why = why
         self.safer = safer
         self.who = who
+        self.again = again
     }
 
     /// The host text: one idea per line, the next command last.
@@ -83,6 +92,9 @@ public struct StopNotice: Sendable, Equatable {
         lines.append(stopLabel("why") + why)
         if let safer {
             lines.append(stopLabel("safer") + safer)
+        }
+        if let again {
+            lines.append(stopLabel("again") + again)
         }
         lines.append(stopLabel("who") + who)
         return lines.joined(separator: "\n")
@@ -407,7 +419,8 @@ private func stopNotice(
         safer: advice?.saferCommand.map(singleLine).flatMap(printableSafer),
         who: stopWho(
             kind: kind, unlock: unlock, ownerStep: ownerRepairStep(in: deny.reason), whoActs: advice?.whoActs,
-            owner: voice.owner)
+            owner: voice.owner),
+        again: stopStreakNote(voice.streak)
     )
 }
 
@@ -479,7 +492,8 @@ public func indeterminateStopNotice(
         subject: command.map(hookDenyCommandPreview),
         rule: reason.map(indeterminateStopRule) ?? "rv.indeterminate/incomplete",
         why: reason.map(indeterminateStopWhy) ?? "rv could not finish checking it",
-        who: ownTerminalLine(owner: voice.owner)
+        who: ownTerminalLine(owner: voice.owner),
+        again: stopStreakNote(voice.streak)
     )
 }
 

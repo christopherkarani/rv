@@ -35,7 +35,8 @@ public func selfProtectionStopNotice(command: ShellCommand?, voice: StopVoice = 
         why: selfProtectionWhy,
         safer: words.flatMap(rvHelpCommand),
         who: words.map { ownerRunsLine($0.joined(separator: " "), owner: voice.owner) }
-            ?? ownTerminalLine(owner: voice.owner)
+            ?? ownTerminalLine(owner: voice.owner),
+        again: stopStreakNote(voice.streak)
     )
 }
 

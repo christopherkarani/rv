@@ -21,6 +21,11 @@ public struct HookEvaluateWorld: Sendable {
     /// `.plain` says "your user" and offers no safer command; rvd and the
     /// hook-local pass give the owner's first name and the pack advice.
     public var voice: StopVoice
+    /// B5: counts one stop shown to an agent session and returns how many
+    /// stops of the same rule that session has hit in a row, this one
+    /// included. rvd keeps the count in memory; nil (tests, the C hook's
+    /// own worlds) counts nothing, and every stop reads as a first.
+    public var countStop: (@Sendable (StopStreakKey) -> Int)?
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
@@ -30,7 +35,8 @@ public struct HookEvaluateWorld: Sendable {
         mintOnDenyWithCommand: (
             @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
         )? = nil,
-        voice: StopVoice = .plain
+        voice: StopVoice = .plain,
+        countStop: (@Sendable (StopStreakKey) -> Int)? = nil
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
@@ -38,5 +44,6 @@ public struct HookEvaluateWorld: Sendable {
         self.recordHostAsk = recordHostAsk
         self.mintOnDenyWithCommand = mintOnDenyWithCommand
         self.voice = voice
+        self.countStop = countStop
     }
 }

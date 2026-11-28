@@ -11,7 +11,7 @@ public func hookWire(
         stdin: stdin,
         codec: codec,
         world: world,
-        firstCall: { result, command, verdict, unlockCode, askRecorded in
+        firstCall: { result, command, verdict, unlockCode, askRecorded, voice in
             hookWire(
                 from: result,
                 command: command,
@@ -21,7 +21,7 @@ public func hookWire(
                     unlockCode: unlockCode,
                     askRecorded: askRecorded
                 ),
-                voice: world.voice
+                voice: voice
             )
         }
     )
@@ -32,7 +32,7 @@ private func hookBody(
     codec: any HostCodec,
     world: HookEvaluateWorld,
     firstCall: (
-        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool, StopVoice
     ) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
@@ -59,7 +59,7 @@ private func hookRequestBody(
     codec: any HostCodec,
     world: HookEvaluateWorld,
     firstCall: (
-        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool, StopVoice
     ) -> HookWire
 ) async -> HookWire {
     switch request {
@@ -68,8 +68,7 @@ private func hookRequestBody(
             request: request,
             file: file,
             codec: codec,
-            evaluateFile: world.evaluateFile,
-            voice: world.voice
+            world: world
         )
     case .shell(_, let command, let cwd, _):
         let result = await world.evaluate(command, cwd)
@@ -94,7 +93,8 @@ private func hookRequestBody(
                 )
             }
         }
-        return firstCall(result, command, auth.verdict, unlockCode, askRecorded)
+        let voice = world.voice(countingStopOf: result, verdict: auth.verdict, request: request)
+        return firstCall(result, command, auth.verdict, unlockCode, askRecorded, voice)
     }
 }
 
@@ -102,13 +102,13 @@ private func hookFileBody(
     request: HookRequest,
     file: FileToolAction,
     codec: any HostCodec,
-    evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult,
-    voice: StopVoice
+    world: HookEvaluateWorld
 ) async -> HookWire {
     if file.path.isEmpty {
-        return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: voice))
+        return codec.encodeDeny(hookCallStopPresentation(.malformed(.missingCommand), voice: world.voice))
     }
-    let result = await evaluateFile(file, request.cwd)
+    let result = await world.evaluateFile(file, request.cwd)
+    let voice = world.voice(countingStopOf: result, verdict: nil, request: request)
     return hookFileWire(from: result, using: codec, path: file.path, voice: voice)
 }
 
