@@ -125,7 +125,7 @@ pass "rvd says it is a test build and uses the test owner check"
 # 1. A destructive command is denied, with a code.
 reply="$(hook "$BUILD" deny-git-reset-hard.json)"
 [[ "$(decision <<<"$reply")" == "deny" ]] || die "git reset --hard was not denied: $reply"
-code="$({ grep -oE 'rv allow-once [0-9a-f]{6}' <<<"$reply" || true; } | head -n 1 | awk '{print $3}')"
+code="$({ grep -oE 'rv (unlock|allow-once) [0-9a-f]{6}' <<<"$reply" || true; } | head -n 1 | awk '{print $3}')"
 [[ -n "$code" ]] || die "the deny carried no allow-once code: $reply"
 pass "hook denies git reset --hard with code $code"
 

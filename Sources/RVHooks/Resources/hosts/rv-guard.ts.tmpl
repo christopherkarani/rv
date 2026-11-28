@@ -48,7 +48,7 @@ async function guardToolCall(pi, event, ctx) {
   const cwd = pickCwd(event.cwd || event.cwdPath);
   const mapped = await consultRv(command, cwd);
   // Step 8B: host dialogs never authorize. Approval happens in
-  // RVOperatorUI (or `rv allow-once`); the agent retries afterwards.
+  // RVOperatorUI (or `rv unlock`); the agent retries afterwards.
   // A legacy `ask` decision blocks like a deny.
   if (mapped.action === "ask" || mapped.action === "block") {
     showDecision(pi, ctx, cardFromBlock(mapped, command));

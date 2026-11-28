@@ -46,4 +46,4 @@ RV EXPLAIN
 │   │   └── $ git stash
 │   └── Documentation: See Git documentation for reset options
 │       └── See: https://git-scm.com/docs/git-reset
-└── Next         run it in Terminal, or rv allow-once
+└── Next         run it in Terminal, or rv unlock

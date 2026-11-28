@@ -2,7 +2,7 @@
 
 Registers ``pre_tool_call`` only. Deny is ``{"action": "block", "message"}``.
 Step 8B: host dialogs never authorize. Approval happens in RVOperatorUI
-(or `rv allow-once`); the agent retries afterwards. A legacy `ask`
+(or `rv unlock`); the agent retries afterwards. A legacy `ask`
 decision blocks like a deny. Allow is None (the tool runs).
 Never leftover host-gate approve as the allow path.
 Missing rv / timeout / crash / non-JSON deny. Exceptions never escape — Hermes

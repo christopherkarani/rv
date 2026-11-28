@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVIsolation
 
 /// Why `rv mcp serve` starts nothing, kept as a value so the same refusal
@@ -113,7 +114,7 @@ public struct MCPServeRefusal: Error, Sendable, Equatable {
         case .configurationUnusable: "rv mcp check"
         case .noServers: "rv mcp import"
         case .unknownServer, .blocked: "rv mcp list"
-        case .secretUndefined(_, let secret): "rv secrets set \(MCPDisplayedText.field(secret))"
+        case .secretUndefined(_, let secret): "\(CommandVocabulary.Alias.secretsAdd.invocation) \(MCPDisplayedText.field(secret))"
         case .secretUnavailable, .secretsUnusable: "rv secrets check"
         case .noSandbox(let server):
             "add \"sandbox\": {\"network\": false} to \(MCPDisplayedText.field(server)) in mcp.json, then rv mcp trust"

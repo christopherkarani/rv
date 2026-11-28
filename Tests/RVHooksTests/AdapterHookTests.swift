@@ -6,7 +6,7 @@ import Testing
 private let resetHardReason =
     "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let resetHardAskReason =
-    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock."
 private let incompleteReason =
     "rv could not finish evaluating this command. Run it in Terminal."
 
@@ -157,7 +157,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("RV_ASK_CONFIRM") == false)
     #expect(source.contains("plugin.approval.request") == false)
     #expect(source.contains("plugin.approval.waitDecision") == false)
-    #expect(source.contains("allow-once"))
+    #expect(source.contains("rv unlock"))
     #expect(source.contains("requireApproval") == false)
     #expect(source.contains("allow-always") == false)
     #expect(source.contains("permission.ask") == false)
@@ -701,8 +701,8 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
     #expect(joined.contains("Meta"))
     #expect(joined.contains("core.git/reset-hard"))
     #expect(joined.contains("Next") == false)
-    #expect(joined.contains("Run it in Terminal, or rv allow-once.") == false)
-    #expect(joined.contains("rv allow-once") == false)
+    #expect(joined.contains("Run it in Terminal, or rv unlock.") == false)
+    #expect((joined.contains("rv allow-once") || joined.contains("rv unlock")) == false)
     #expect(joined.contains("┏") == false)
     #expect(joined.contains("│") == false)
     #expect(result.cardVariant == "block")
@@ -727,7 +727,7 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
         return
     }
     #expect(Array(lines.prefix(4)) == stopShapeReason.split(separator: "\n").map(String.init))
-    #expect(lines.filter { $0.contains("rv allow-once a7c835") }.count == 1)
+    #expect(lines.filter { $0.contains("rv unlock a7c835") }.count == 1)
     #expect(lines.contains { $0.hasPrefix("Next") || $0.hasPrefix("Cmd") || $0.hasPrefix("Meta") } == false)
     #expect(result.cardNext == nil)
     #expect(result.cardRule == nil)
@@ -1460,8 +1460,8 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     #expect(message.contains("Meta"))
     #expect(message.contains("core.git/reset-hard"))
     #expect(message.contains("Next") == false)
-    #expect(message.contains("Run it in Terminal, or rv allow-once.") == false)
-    #expect(message.contains("rv allow-once") == false)
+    #expect(message.contains("Run it in Terminal, or rv unlock.") == false)
+    #expect((message.contains("rv allow-once") || message.contains("rv unlock")) == false)
     #expect(message != resetHardReason)
 }
 
@@ -1475,7 +1475,7 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     )
     #expect(result.threw == stopShapeReason)
     #expect(result.toastTitle == "✕ Stopped   git reset --hard origin/main (core.git/reset-hard)")
-    #expect(result.toastMessage == "why     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv allow-once a7c835")
+    #expect(result.toastMessage == "why     destroys uncommitted changes\nsafer   git status\nwho     ask Chris to run  rv unlock a7c835")
 }
 
 @Test func openCodeAdapter_toastSplitsWrapperCommand() async throws {
@@ -1491,7 +1491,7 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     #expect(message.contains("Meta"))
     #expect(message.contains("core.git/reset-hard"))
     #expect(message.contains("Next") == false)
-    #expect(message.contains("Run it in Terminal, or rv allow-once.") == false)
+    #expect(message.contains("Run it in Terminal, or rv unlock.") == false)
 }
 
 @Test func openCodeAdapter_legacyClientToastsViaWrappedBody() async throws {
@@ -1684,7 +1684,7 @@ private let missingShellCommandReason =
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
-    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv unlock.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv unlock.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
     "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
@@ -1693,11 +1693,11 @@ private let wrapperResetHardJSON =
 /// rv's stop as the Pi / OpenCode codec writes it (the stop-shape golden).
 private let stopShapeReason =
     "✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\nwhy     destroys uncommitted changes\n"
-    + "safer   git status\nwho     ask Chris to run  rv allow-once a7c835"
+    + "safer   git status\nwho     ask Chris to run  rv unlock a7c835"
 private let stopShapeJSON =
     "{\"decision\":\"deny\",\"reason\":\"✕ Stopped   git reset --hard origin/main (core.git/reset-hard)\\nwhy     "
-    + "destroys uncommitted changes\\nsafer   git status\\nwho     ask Chris to run  rv allow-once a7c835\","
-    + "\"rule\":\"core.git/reset-hard\",\"next\":\"ask Chris to run  rv allow-once a7c835\"}\n"
+    + "destroys uncommitted changes\\nsafer   git status\\nwho     ask Chris to run  rv unlock a7c835\","
+    + "\"rule\":\"core.git/reset-hard\",\"next\":\"ask Chris to run  rv unlock a7c835\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 

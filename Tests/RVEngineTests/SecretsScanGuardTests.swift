@@ -411,7 +411,7 @@ struct SecretsScanGuardTests {
         }
         #expect(deny.ruleID == RuleID(pack: .coreSecrets, pattern: "secrets-scan"))
         #expect(deny.reason.hasPrefix("Only the owner can switch off or silence the commit check."))
-        #expect(deny.reason.contains("rv secrets set NAME"))
+        #expect(deny.reason.contains("rv secrets add NAME"))
     }
 
     @Test("file door: the ignore file, git config and hooks, the global git config", arguments: [

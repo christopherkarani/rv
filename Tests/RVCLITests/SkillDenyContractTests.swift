@@ -92,7 +92,7 @@ private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -
         #expect(text.contains("═") == false, Comment(rawValue: row.id))
         #expect(text.contains("┌") == false, Comment(rawValue: row.id))
         let body = stopLines.dropFirst().joined(separator: "\n")
-        #expect(body.contains("rv allow-once") == false, Comment(rawValue: row.id))
+        #expect((body.contains("rv allow-once") || body.contains("rv unlock")) == false, Comment(rawValue: row.id))
         #expect(body.contains("Terminal") == false, Comment(rawValue: row.id))
 
         let test = testViewModel(from: result, command: shell)

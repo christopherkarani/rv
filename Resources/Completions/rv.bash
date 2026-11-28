@@ -12,7 +12,7 @@ _rv() {
     workspace)
       COMPREPLY=( $(compgen -W "start attach status close" -- "$cur") )
       ;;
-    allow-once)
+    unlock|allow-once)
       COMPREPLY=( $(compgen -W "mint list clear" -- "$cur") )
       ;;
     allowlist)
