@@ -253,11 +253,12 @@ public struct DecisionStory: Equatable, Sendable {
         public var glyph: CommandVocabulary.Glyph {
             switch self {
             case .stopped: .stopped
-            case .wouldStop, .wouldAsk: .watched
+            case .wouldStop: .watched
+            case .wouldAsk: .ask
             }
         }
 
-        /// `✕ Stopped`, `◐ Would stop`.
+        /// `✕ Stopped`, `◐ Would stop`, `⏺ Asks`.
         public var label: String {
             let word = glyph.eventWord ?? glyph.word
             return glyph.rawValue + " " + word.prefix(1).uppercased() + word.dropFirst()
@@ -292,6 +293,9 @@ public struct DecisionStory: Equatable, Sendable {
     public var holdsInEveryMode: Bool
     /// rvd kept no command text for this row.
     public var commandMissing: Bool
+    /// Other logged calls whose ids share this six-digit code; the story
+    /// is the newest one's.
+    public var othersSharingCode: Int = 0
 
     /// - Parameters:
     ///   - entry: the `rv log` row the code names.
@@ -320,7 +324,7 @@ public struct DecisionStory: Equatable, Sendable {
             self.who = Self.personInTerminal
             self.holdsInEveryMode = true
         case .couldNotCheck:
-            self.why = Self.couldNotCheckWhy(rule: entry.rule)
+            self.why = Self.couldNotCheckWhy(rule: entry.rule, stopped: entry.stopped)
             self.safer = nil
             self.who = Self.personInTerminal
             self.holdsInEveryMode = entry.stopped
@@ -362,11 +366,14 @@ public struct DecisionStory: Equatable, Sendable {
             : nil
     }
 
-    private static func couldNotCheckWhy(rule: String) -> String {
+    /// The reason in plain words, by what happened: only a stop claims
+    /// the command did not run.
+    private static func couldNotCheckWhy(rule: String, stopped: Bool) -> String {
+        let blind = stopped ? ", so it stopped it" : "; watch mode let it run"
         let raw = rule.hasPrefix(indeterminatePrefix) ? String(rule.dropFirst(indeterminatePrefix.count)) : rule
         switch IndeterminateReason(rawValue: raw) ?? IndeterminateReason(rawValue: rule) {
         case .observeUnanalyzable?, .unresolvedInvocation?:
-            return "rv can't see what this command runs, so it stops in every mode"
+            return "rv can't see what this command runs" + blind
         case .budgetExhausted?:
             return "rv ran out of time checking this long command"
         case .commandTooLarge?:
@@ -374,7 +381,7 @@ public struct DecisionStory: Equatable, Sendable {
         case .corePacksUnavailable?:
             return "rv's rules did not load, so it could not check anything"
         case .inlineProgramNeedsJudge?, .packageScriptUnresolved?:
-            return "rv can't see inside this script, so it stops in every mode"
+            return "rv can't see inside this script" + blind
         case .selfProtection?:
             return selfProtectionWhy(rule: rule)
         case nil:
@@ -401,6 +408,8 @@ public struct DecisionStoryRobotPayload: Equatable, Sendable, Encodable {
     public var safer: String?
     public var who: String?
     public var holdsInEveryMode: Bool
+    /// Other logged calls whose ids share the code (the story is the newest).
+    public var othersSharingCode: Int
 
     public init(_ story: DecisionStory) {
         self.code = story.code
@@ -417,5 +426,6 @@ public struct DecisionStoryRobotPayload: Equatable, Sendable, Encodable {
         self.safer = story.safer
         self.who = story.who
         self.holdsInEveryMode = story.holdsInEveryMode
+        self.othersSharingCode = story.othersSharingCode
     }
 }

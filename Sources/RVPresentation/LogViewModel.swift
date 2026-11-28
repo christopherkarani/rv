@@ -25,11 +25,13 @@ public struct LogEntry: Equatable, Sendable {
     /// The call's code (`a7c-835`); nil when its row carries no id.
     public var code: String?
     public var session: String?
+    /// The call's full id (12 hex digits) the code is cut from, or nil.
+    public var id: String?
 
     public init(
         time: Date, agent: String, stopped: Bool, wouldAsk: Bool = false, rule: String,
         isJudge: Bool = false, tool: String, target: String, command: String? = nil, code: String?,
-        session: String? = nil
+        session: String? = nil, id: String? = nil
     ) {
         self.time = time
         self.agent = agent
@@ -42,6 +44,7 @@ public struct LogEntry: Equatable, Sendable {
         self.command = command
         self.code = code
         self.session = session
+        self.id = id
     }
 
     /// A judge note in shadow: the judge's own would-stop, which watch
